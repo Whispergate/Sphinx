@@ -51,7 +51,7 @@ From your Mythic server directory:
 ./mythic-cli install folder /path/to/Sphinx
 
 # ...or from GitHub
-./mythic-cli install github https://github.com/hunterino-sec/Sphinx
+./mythic-cli install github https://github.com/Whispergate/Sphinx
 
 # Start the container
 ./mythic-cli start sphinx
