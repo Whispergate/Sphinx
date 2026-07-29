@@ -92,7 +92,7 @@ trigger: manual
 trigger_data: {}
 environment:
     LITTERBOX_URL: http://<litterbox-ip>:1337
-    PAYLOAD_UUID: d5c725bf-495b-4b6f-ad7f-065fa9276696
+    PAYLOAD_UUID: <payload-uuid>
     SCAN_TYPE: static
     TIMEOUT: "120"
 keywords:
