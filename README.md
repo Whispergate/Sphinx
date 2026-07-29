@@ -111,7 +111,7 @@ Save and **enable** the workflow.
 | `static` | YARA / PE / string analysis. Fast, effectively synchronous. |
 | `dynamic` | Behavioral + memory analysis. Polled until `completed` / `blocked_by_av`. |
 | `both` | Runs static and dynamic concurrently. |
-| `holygrail` | Combined deep analysis (static + dynamic in one pass). Synchronous. |
+| `holygrail` | BYOVD hunter |
 | `edr` | Detonates the payload on an EDR-monitored VM and collects detection alerts. Requires an `edr_profile` input (or auto-discovers available profiles). Polled until complete. |
 | `all` | Runs static, dynamic, and EDR concurrently. |
 
