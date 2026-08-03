@@ -68,19 +68,31 @@ In the Mythic UI go to **Eventing → New Workflow**. Below are two example work
 ### Automatic - scan on payload build
 
 ```yaml
-name: Sphinx LitterBox Scan
-description: Submit new payloads to LitterBox for analysis and tag with verdict
+name: "Sphinx LitterBox Auto Scan"
+description: "Submit new payloads to LitterBox for analysis and tag with verdict"
 trigger: payload_build_finish
 trigger_data:
-    payload_types: []
-environment:
-    LITTERBOX_URL: http://<litterbox_ip>:1337
-    SCAN_TYPE: both
-    TIMEOUT: "120"
+  payload_types: []
 keywords:
-    - sphinx
-    - litterbox
-run_as: bot
+  - sphinx
+  - litterbox
+environment:
+  LITTERBOX_URL: "http://<litterbox-ip>:1337"
+  SCAN_TYPE: "static"
+  TIMEOUT: "120"
+steps:
+  - name: "scan_payload"
+    description: "Upload payload to LitterBox and tag with verdict"
+    inputs:
+      payload_uuid: env.uuid
+      litterbox_url: env.LITTERBOX_URL
+      scan_type: env.SCAN_TYPE
+      mythic_api_token: mythic.apitoken
+      timeout: env.TIMEOUT
+    action: custom_function
+    action_data:
+      container_name: sphinx
+      function_name: execute_script
 
 ```
 
@@ -94,24 +106,23 @@ trigger_data: {}
 keywords:
   - sphinx
 environment:
+  PAYLOAD_UUID: ""
   LITTERBOX_URL: "http://<litterbox-ip>:1337"
-  PAYLOAD_UUID: "<payload-uuid>"
   SCAN_TYPE: "static"
   TIMEOUT: "120"
-run_as: bot
 steps:
-  - name: "scan_and_tag"
-    description: "Upload payload to LitterBox, run scans, and tag with verdict"
+  - name: "scan_payload"
+    description: "Upload payload to LitterBox and tag with verdict"
+    inputs:
+      payload_uuid: env.PAYLOAD_UUID
+      litterbox_url: env.LITTERBOX_URL
+      scan_type: env.SCAN_TYPE
+      mythic_api_token: mythic.apitoken
+      timeout: env.TIMEOUT
     action: custom_function
     action_data:
       container_name: sphinx
       function_name: execute_script
-    inputs:
-      payload_uuid: "{{env.PAYLOAD_UUID}}"
-      mythic_api_token: "{{mythic.apitoken}}"
-      litterbox_url: "{{env.LITTERBOX_URL}}"
-      scan_type: "{{env.SCAN_TYPE}}"
-      timeout: "{{env.TIMEOUT}}"
 ```
 
 Replace `LITTERBOX_URL` with your LitterBox instance address. `SCAN_TYPE` can be `static`, `dynamic`, `both`, `holygrail`, `edr`, or `all`.
