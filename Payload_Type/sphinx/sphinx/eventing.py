@@ -116,10 +116,13 @@ async def execute_script(msg: NewCustomEventingMessage) -> NewCustomEventingMess
         logger.warning("Upload OK — md5=%s", md5)
 
         needed = await _lb_scans_needed(lb_url, md5, scan_type, edr_profile)
+        scan_status = {}
         if needed:
             logger.warning("Triggering scans for %s: %s", md5, needed)
-            await _lb_trigger_scans(lb_url, md5, needed, edr_profile)
-            await _lb_poll_verdict_risk(lb_url, md5, needed, poll_timeout, edr_profile)
+            scan_status = await _lb_trigger_scans(lb_url, md5, needed, edr_profile)
+            scan_status = await _lb_poll_verdict_risk(
+                lb_url, md5, needed, poll_timeout, edr_profile, scan_status,
+            )
         else:
             logger.warning("LitterBox already has all results for %s, skipping scans", md5)
 
@@ -133,9 +136,11 @@ async def execute_script(msg: NewCustomEventingMessage) -> NewCustomEventingMess
         level        = (risk_data.get("risk_level") or "low").lower()
         label, color = _VERDICT_MAP.get(level, ("Sphinx: Unknown", "#9E9E9E"))
 
+        warnings = [f"{k}: {v}" for k, v in scan_status.items() if v not in ("completed", "triggered")]
+
         await _mythic_tag_payload(
             auth_headers, payload_int_id, label, color,
-            risk_data, md5, lb_url, scan_type,
+            risk_data, md5, lb_url, scan_type, scan_status, warnings,
         )
 
         score = risk_data.get("risk_score", "N/A")
@@ -199,7 +204,8 @@ async def _download_file(headers: dict, agent_file_id: str) -> bytes:
 
 async def _mythic_tag_payload(
     headers: dict, payload_id: int, label: str, color: str,
-    risk_data: dict, md5: str, lb_url: str, scan_type: str
+    risk_data: dict, md5: str, lb_url: str, scan_type: str,
+    scan_status: dict | None = None, warnings: list | None = None,
 ) -> None:
     data      = await _gql(headers, _QUERY_TAGTYPE, {"name": label})
     tagtypes  = data.get("tagtype", [])
@@ -218,6 +224,8 @@ async def _mythic_tag_payload(
         "risk_factors_edr": risk_data.get("risk_factors_edr", []),
         "hash":         md5,
         "scan_type":    scan_type,
+        "scan_status":  scan_status or {},
+        "warnings":     warnings or [],
         "results_url":  f"{lb_url}/results/info/{md5}",
     }
     await _gql(headers, _INSERT_TAG, {
@@ -289,49 +297,66 @@ async def _lb_scans_needed(lb_url: str, md5: str, scan_type: str, edr_profile: s
     return needed
 
 
-async def _lb_trigger_scans(lb_url: str, md5: str, needed, edr_profile: str = "") -> None:
+async def _lb_trigger_scans(lb_url: str, md5: str, needed, edr_profile: str = "") -> dict:
     if isinstance(needed, str):
         needed = {needed}
+    scan_status = {}
     async with httpx.AsyncClient(timeout=120) as client:
         tasks = []
+        labels = []
         if "static" in needed:
             tasks.append(client.post(f"{lb_url}/analyze/static/{md5}"))
+            labels.append("static")
         if "dynamic" in needed:
             tasks.append(client.post(f"{lb_url}/analyze/dynamic/{md5}"))
+            labels.append("dynamic")
         if "holygrail" in needed:
             tasks.append(client.post(f"{lb_url}/analyze/holygrail/{md5}"))
+            labels.append("holygrail")
         if "edr" in needed:
             profiles = [edr_profile] if edr_profile else await _lb_get_edr_profiles(lb_url)
             for p in profiles:
                 tasks.append(client.post(f"{lb_url}/analyze/edr/{p}/{md5}"))
+                labels.append(f"edr:{p}")
         logger.info("Triggering %d scan(s): %s", len(tasks), needed)
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for i, r in enumerate(responses):
+            lbl = labels[i]
             if isinstance(r, Exception):
                 logger.error("Scan trigger %d failed: %r", i, r)
+                scan_status[lbl] = f"trigger_error: {r}"
             else:
                 logger.warning("Scan trigger %d: %s — %s", i, r.status_code, r.text[:300])
+                if r.status_code >= 400:
+                    detail = r.json().get("error", r.json().get("status", f"HTTP {r.status_code}"))
+                    scan_status[lbl] = detail
+                else:
+                    scan_status[lbl] = r.json().get("status", "triggered")
+    return scan_status
 
 
 async def _lb_poll_verdict_risk(lb_url: str, md5: str, needed,
-                                timeout: int, edr_profile: str = "") -> dict:
+                                timeout: int, edr_profile: str = "",
+                                scan_status: dict | None = None) -> dict:
+    if scan_status is None:
+        scan_status = {}
     if isinstance(needed, str):
         needed = {needed}
 
     sync_only = needed <= {"static", "holygrail"}
     if sync_only:
         await asyncio.sleep(3)
-        return await _lb_fetch_risk(lb_url, md5)
+        return scan_status
 
-    poll_urls = []
+    poll_urls = {}
     if "dynamic" in needed:
-        poll_urls.append(f"{lb_url}/api/results/dynamic/{md5}")
+        poll_urls[f"{lb_url}/api/results/dynamic/{md5}"] = "dynamic"
     if "edr" in needed:
         profiles = [edr_profile] if edr_profile else await _lb_get_edr_profiles(lb_url)
         for p in profiles:
-            poll_urls.append(f"{lb_url}/api/results/edr/{p}/{md5}")
+            poll_urls[f"{lb_url}/api/results/edr/{p}/{md5}"] = f"edr:{p}"
 
-    _TERMINAL = {"completed", "blocked_by_av", "partial", "error", "agent_unreachable"}
+    _TERMINAL = {"completed", "blocked_by_av", "partial", "error", "agent_unreachable", "early_termination"}
 
     interval = _POLL_START
     elapsed  = 0.0
@@ -341,29 +366,35 @@ async def _lb_poll_verdict_risk(lb_url: str, md5: str, needed,
         elapsed += interval
 
         all_done = True
-        for url in poll_urls:
+        for url, lbl in poll_urls.items():
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     r = await client.get(url)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                logger.warning("Poll %s → HTTP error: %r", url, exc)
                 all_done = False
                 continue
 
             if r.status_code != 200:
-                all_done = False
+                logger.warning("Poll %s → %s (treating as done)", url, r.status_code)
+                scan_status[lbl] = f"poll_error (HTTP {r.status_code})"
                 continue
 
             status = r.json().get("status", "")
             logger.warning("Poll %s → status=%s", url, status)
+            scan_status[lbl] = status
             if status not in _TERMINAL:
                 all_done = False
 
         if all_done and poll_urls:
-            return await _lb_fetch_risk(lb_url, md5)
+            return scan_status
 
         interval = min(interval * _POLL_BACKOFF, _POLL_MAX)
 
-    return await _lb_fetch_risk(lb_url, md5)
+    for lbl in poll_urls.values():
+        if scan_status.get(lbl) not in _TERMINAL:
+            scan_status[lbl] = "timeout"
+    return scan_status
 
 
 async def _lb_get_edr_profiles(lb_url: str) -> list[str]:
