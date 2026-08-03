@@ -136,7 +136,7 @@ async def execute_script(msg: NewCustomEventingMessage) -> NewCustomEventingMess
         level        = (risk_data.get("risk_level") or "low").lower()
         label, color = _VERDICT_MAP.get(level, ("Sphinx: Unknown", "#9E9E9E"))
 
-        warnings = [f"{k}: {v}" for k, v in scan_status.items() if v not in ("completed", "triggered")]
+        warnings = [f"{k}: {v}" for k, v in scan_status.items() if v not in ("completed", "triggered", "")]
 
         await _mythic_tag_payload(
             auth_headers, payload_int_id, label, color,
@@ -356,7 +356,7 @@ async def _lb_poll_verdict_risk(lb_url: str, md5: str, needed,
         for p in profiles:
             poll_urls[f"{lb_url}/api/results/edr/{p}/{md5}"] = f"edr:{p}"
 
-    _TERMINAL = {"completed", "blocked_by_av", "partial", "error", "agent_unreachable", "early_termination"}
+    _TERMINAL = {"completed", "blocked_by_av", "partial", "error", "agent_unreachable", "early_termination", ""}
 
     interval = _POLL_START
     elapsed  = 0.0
