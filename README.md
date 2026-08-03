@@ -74,30 +74,44 @@ trigger: payload_build_finish
 trigger_data:
     payload_types: []
 environment:
-    LITTERBOX_URL: http://<litterbox-ip>:1337
-    SCAN_TYPE: all
+    LITTERBOX_URL: http://<litterbox_ip>:1337
+    SCAN_TYPE: both
     TIMEOUT: "120"
 keywords:
     - sphinx
     - litterbox
 run_as: bot
+
 ```
 
 ### Manual - scan a specific payload
 
 ```yaml
-name: Sphinx Manual Scan
-description: Manually scan a payload with LitterBox
+name: "Sphinx Manual Scan"
+description: "Manually scan a payload with LitterBox"
 trigger: manual
 trigger_data: {}
-environment:
-    LITTERBOX_URL: http://<litterbox-ip>:1337
-    PAYLOAD_UUID: <payload-uuid>
-    SCAN_TYPE: static
-    TIMEOUT: "120"
 keywords:
-    - sphinx
+  - sphinx
+environment:
+  LITTERBOX_URL: "http://<litterbox-ip>:1337"
+  PAYLOAD_UUID: "<payload-uuid>"
+  SCAN_TYPE: "static"
+  TIMEOUT: "120"
 run_as: bot
+steps:
+  - name: "scan_and_tag"
+    description: "Upload payload to LitterBox, run scans, and tag with verdict"
+    action: custom_function
+    action_data:
+      container_name: sphinx
+      function_name: execute_script
+    inputs:
+      payload_uuid: "{{env.PAYLOAD_UUID}}"
+      mythic_api_token: "{{mythic.apitoken}}"
+      litterbox_url: "{{env.LITTERBOX_URL}}"
+      scan_type: "{{env.SCAN_TYPE}}"
+      timeout: "{{env.TIMEOUT}}"
 ```
 
 Replace `LITTERBOX_URL` with your LitterBox instance address. `SCAN_TYPE` can be `static`, `dynamic`, `both`, `holygrail`, `edr`, or `all`.
