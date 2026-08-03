@@ -51,7 +51,7 @@ From your Mythic server directory:
 ./mythic-cli install folder /path/to/Sphinx
 
 # ...or from GitHub
-./mythic-cli install github https://github.com/hunterino-sec/Sphinx
+./mythic-cli install github https://github.com/Whispergate/Sphinx
 
 # Start the container
 ./mythic-cli start sphinx
@@ -68,36 +68,61 @@ In the Mythic UI go to **Eventing → New Workflow**. Below are two example work
 ### Automatic - scan on payload build
 
 ```yaml
-name: Sphinx LitterBox Scan
-description: Submit new payloads to LitterBox for analysis and tag with verdict
+name: "Sphinx LitterBox Auto Scan"
+description: "Submit new payloads to LitterBox for analysis and tag with verdict"
 trigger: payload_build_finish
 trigger_data:
-    payload_types: []
-environment:
-    LITTERBOX_URL: http://<litterbox-ip>:1337
-    SCAN_TYPE: all
-    TIMEOUT: "120"
+  payload_types: []
 keywords:
-    - sphinx
-    - litterbox
-run_as: bot
+  - sphinx
+  - litterbox
+environment:
+  LITTERBOX_URL: "http://<litterbox-ip>:1337"
+  SCAN_TYPE: "static"
+  TIMEOUT: "120"
+steps:
+  - name: "scan_payload"
+    description: "Upload payload to LitterBox and tag with verdict"
+    inputs:
+      payload_uuid: env.uuid
+      litterbox_url: env.LITTERBOX_URL
+      scan_type: env.SCAN_TYPE
+      mythic_api_token: mythic.apitoken
+      timeout: env.TIMEOUT
+    action: custom_function
+    action_data:
+      container_name: sphinx
+      function_name: execute_script
+
 ```
 
 ### Manual - scan a specific payload
 
 ```yaml
-name: Sphinx Manual Scan
-description: Manually scan a payload with LitterBox
+name: "Sphinx Manual Scan"
+description: "Manually scan a payload with LitterBox"
 trigger: manual
 trigger_data: {}
-environment:
-    LITTERBOX_URL: http://<litterbox-ip>:1337
-    PAYLOAD_UUID: d5c725bf-495b-4b6f-ad7f-065fa9276696
-    SCAN_TYPE: static
-    TIMEOUT: "120"
 keywords:
-    - sphinx
-run_as: bot
+  - sphinx
+environment:
+  PAYLOAD_UUID: ""
+  LITTERBOX_URL: "http://<litterbox-ip>:1337"
+  SCAN_TYPE: "static"
+  TIMEOUT: "120"
+steps:
+  - name: "scan_payload"
+    description: "Upload payload to LitterBox and tag with verdict"
+    inputs:
+      payload_uuid: env.PAYLOAD_UUID
+      litterbox_url: env.LITTERBOX_URL
+      scan_type: env.SCAN_TYPE
+      mythic_api_token: mythic.apitoken
+      timeout: env.TIMEOUT
+    action: custom_function
+    action_data:
+      container_name: sphinx
+      function_name: execute_script
 ```
 
 Replace `LITTERBOX_URL` with your LitterBox instance address. `SCAN_TYPE` can be `static`, `dynamic`, `both`, `holygrail`, `edr`, or `all`.
@@ -111,7 +136,7 @@ Save and **enable** the workflow.
 | `static` | YARA / PE / string analysis. Fast, effectively synchronous. |
 | `dynamic` | Behavioral + memory analysis. Polled until `completed` / `blocked_by_av`. |
 | `both` | Runs static and dynamic concurrently. |
-| `holygrail` | Combined deep analysis (static + dynamic in one pass). Synchronous. |
+| `holygrail` | BYOVD hunter |
 | `edr` | Detonates the payload on an EDR-monitored VM and collects detection alerts. Requires an `edr_profile` input (or auto-discovers available profiles). Polled until complete. |
 | `all` | Runs static, dynamic, and EDR concurrently. |
 
