@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 import httpx
 from mythic_container.EventingBase import (
@@ -8,6 +9,10 @@ from mythic_container.EventingBase import (
     Eventing,
     NewCustomEventingMessage,
     NewCustomEventingMessageResponse,
+)
+from mythic_container.SharedClasses import (
+    ContainerOnStartMessage,
+    ContainerOnStartMessageResponse,
 )
 
 logger = logging.getLogger("sphinx")
@@ -70,7 +75,11 @@ async def execute_script(msg: NewCustomEventingMessage) -> NewCustomEventingMess
         scan_type     = msg.Inputs.get("scan_type", "static").lower()
         edr_profile   = msg.Inputs.get("edr_profile", "").strip()
         mythic_token  = msg.Inputs.get("mythic_api_token", "")
-        poll_timeout  = int(msg.Inputs.get("timeout", "120"))
+        raw_timeout   = msg.Inputs.get("timeout", "120")
+        try:
+            poll_timeout = int(raw_timeout)
+        except (ValueError, TypeError):
+            poll_timeout = 120
 
         _VALID_SCANS = {"static", "dynamic", "both", "holygrail", "edr", "all"}
 
@@ -102,17 +111,20 @@ async def execute_script(msg: NewCustomEventingMessage) -> NewCustomEventingMess
             )
 
         payload_bytes = await _download_file(auth_headers, agent_file_id)
+        logger.warning("Uploading %d bytes to %s as %r", len(payload_bytes), lb_url, filename)
         md5           = await _lb_upload(lb_url, payload_bytes, filename)
+        logger.warning("Upload OK — md5=%s", md5)
 
         needed = await _lb_scans_needed(lb_url, md5, scan_type, edr_profile)
         if needed:
-            logger.info("Triggering scans for %s: %s", md5, needed)
+            logger.warning("Triggering scans for %s: %s", md5, needed)
             await _lb_trigger_scans(lb_url, md5, needed, edr_profile)
             await _lb_poll_verdict_risk(lb_url, md5, needed, poll_timeout, edr_profile)
         else:
-            logger.info("LitterBox already has all results for %s, skipping scans", md5)
+            logger.warning("LitterBox already has all results for %s, skipping scans", md5)
 
         risk_data    = await _lb_fetch_risk(lb_url, md5)
+        logger.warning("Risk data for %s: %s", md5, risk_data)
         edr_data     = await _lb_fetch_edr_summary(lb_url, md5)
         logger.warning("EDR summary for %s: %s", md5, edr_data)
         if edr_data:
@@ -234,8 +246,8 @@ async def _lb_upload(lb_url: str, data: bytes, filename: str) -> str:
             f"{lb_url}/upload",
             files={"file": (filename, data, "application/octet-stream")},
         )
+        logger.warning("LitterBox upload response: %s %s", r.status_code, r.text[:500])
         if r.status_code != 200:
-            logger.error("LitterBox upload failed (%s): %s", r.status_code, r.text)
             r.raise_for_status()
         return r.json()["file_info"]["md5"]
 
@@ -298,7 +310,7 @@ async def _lb_trigger_scans(lb_url: str, md5: str, needed, edr_profile: str = ""
             if isinstance(r, Exception):
                 logger.error("Scan trigger %d failed: %r", i, r)
             else:
-                logger.info("Scan trigger %d: %s", i, r.status_code)
+                logger.warning("Scan trigger %d: %s — %s", i, r.status_code, r.text[:300])
 
 
 async def _lb_poll_verdict_risk(lb_url: str, md5: str, needed,
@@ -342,6 +354,7 @@ async def _lb_poll_verdict_risk(lb_url: str, md5: str, needed,
                 continue
 
             status = r.json().get("status", "")
+            logger.warning("Poll %s → status=%s", url, status)
             if status not in _TERMINAL:
                 all_done = False
 
@@ -416,6 +429,20 @@ async def _lb_fetch_risk(lb_url: str, md5: str) -> dict:
     return {}
 
 
+WORKFLOWS_DIR = Path(__file__).parent / "workflows"
+
+_IMPORT_MUTATION = """
+mutation ImportWorkflow($contents: String!, $filename: String!, $container_name: String!, $delete_old_version: Boolean) {
+    eventingImportContainerWorkflow(
+        contents: $contents,
+        filename: $filename,
+        container_name: $container_name,
+        delete_old_version: $delete_old_version
+    ) { status error eventgroup_id }
+}
+"""
+
+
 class SphinxEventing(Eventing):
     name = "sphinx"
     description = "Submit payloads to LitterBox for analysis and tag with verdict"
@@ -426,3 +453,35 @@ class SphinxEventing(Eventing):
             Function=execute_script,
         ),
     ]
+
+    async def on_container_start(self, message: ContainerOnStartMessage) -> ContainerOnStartMessageResponse:
+        if message.APIToken:
+            await _register_workflows(message.APIToken)
+        return ContainerOnStartMessageResponse(ContainerName=self.name)
+
+
+async def _register_workflows(api_token: str) -> None:
+    headers = {"Authorization": f"Bearer {api_token}"}
+    for yml in sorted(WORKFLOWS_DIR.glob("*.yaml")):
+        contents = yml.read_text()
+        variables = {
+            "contents": contents,
+            "filename": yml.name,
+            "container_name": "sphinx",
+            "delete_old_version": True,
+        }
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15) as client:
+                r = await client.post(
+                    MYTHIC_GRAPHQL,
+                    headers=headers,
+                    json={"query": _IMPORT_MUTATION, "variables": variables},
+                )
+                body = r.json()
+                data = body.get("data", {}).get("eventingImportContainerWorkflow", {})
+                if data.get("status") == "success":
+                    logger.warning("Registered workflow %s (id=%s)", yml.name, data.get("eventgroup_id"))
+                else:
+                    logger.error("Failed to register %s: %s", yml.name, data.get("error") or body)
+        except Exception as exc:
+            logger.error("Failed to register workflow %s: %r", yml.name, exc)

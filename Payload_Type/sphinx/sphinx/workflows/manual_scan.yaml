@@ -1,0 +1,25 @@
+name: Sphinx Manual Scan
+description: Manually scan a payload with LitterBox
+trigger: manual
+trigger_data: {}
+environment:
+    LITTERBOX_URL: http://<litterbox-ip>:1337
+    PAYLOAD_UUID: ""
+    SCAN_TYPE: static
+    TIMEOUT: "120"
+keywords:
+    - sphinx
+run_as: bot
+steps:
+    - name: scan_and_tag
+      description: Upload payload to LitterBox, run scans, and tag with verdict
+      action: custom_function
+      action_data:
+          container_name: sphinx
+          function_name: execute_script
+      inputs:
+          payload_uuid: "{{env.PAYLOAD_UUID}}"
+          mythic_api_token: "{{mythic.apitoken}}"
+          litterbox_url: "{{env.LITTERBOX_URL}}"
+          scan_type: "{{env.SCAN_TYPE}}"
+          timeout: "{{env.TIMEOUT}}"

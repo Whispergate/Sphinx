@@ -1,0 +1,26 @@
+name: Sphinx LitterBox Scan
+description: Submit new payloads to LitterBox for analysis and tag with verdict
+trigger: payload_build_finish
+trigger_data:
+    payload_types: []
+environment:
+    LITTERBOX_URL: http://<litterbox-ip>:1337
+    SCAN_TYPE: all
+    TIMEOUT: "120"
+keywords:
+    - sphinx
+    - litterbox
+run_as: bot
+steps:
+    - name: scan_and_tag
+      description: Upload payload to LitterBox, run scans, and tag with verdict
+      action: custom_function
+      action_data:
+          container_name: sphinx
+          function_name: execute_script
+      inputs:
+          payload_uuid: "{{trigger.payload_uuid}}"
+          mythic_api_token: "{{mythic.apitoken}}"
+          litterbox_url: "{{env.LITTERBOX_URL}}"
+          scan_type: "{{env.SCAN_TYPE}}"
+          timeout: "{{env.TIMEOUT}}"
